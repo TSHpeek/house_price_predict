@@ -12,6 +12,8 @@ from sklearn.pipeline import Pipeline   # 管道操作
 from sklearn.impute import SimpleImputer    # 缺省值处理
 from sklearn.preprocessing import StandardScaler, OneHotEncoder # 标准化和独热编码
 from torch.utils.data import TensorDataset, DataLoader  # 数据集和数据加载器
+from config import *
+
 
 # 创建数据集
 def create_dataset():
@@ -61,11 +63,6 @@ def create_dataset():
     # 返回训练集和测试集，以及特征的数量
     return train_dataset, test_dataset, x_train.shape[1]
 
-# 测试主流程
-# 1. 加载数据
-train_dataset, test_dataset, feature_num = create_dataset()
-print(feature_num)
-
 # 2. 创建模型
 class Model(nn.Module):  #继承父类
     def __init__(self,device='cpu',feature_num=feature_num):
@@ -75,7 +72,7 @@ class Model(nn.Module):  #继承父类
         self.linear1 = nn.Linear(feature_num,128,device=device)
         nn.init.xavier_uniform_(self.linear1.weight)  # 初始化
         self.bn1 = nn.BatchNorm1d(128,device=device)
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.1)
         self.linear2 = nn.Linear(128,1,device=device)
 
     # 前向传播
@@ -87,10 +84,6 @@ class Model(nn.Module):  #继承父类
         x = self.dropout(x)
         x = self.linear2(x)
         return x
-# 统一定义全局变量：device
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-# 定义模型
-model = Model(device=device,feature_num=feature_num)
 
 # 3. 自定义损失函数
 def log_rmse(y_pred, target):
@@ -99,8 +92,8 @@ def log_rmse(y_pred, target):
     return torch.sqrt( mse( torch.log(y_pred), torch.log(target) ) )
 mse_loss = nn.MSELoss()
 
-# 4. 模型训练和测试
-def train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device):
+# 4. 模型训练
+def train(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device):
     #  将模型加载到设备
     model = model.to(device)
     # 定义优化器
@@ -109,7 +102,7 @@ def train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, de
     train_loss_list = []
     test_loss_list = []
 
-    # 2. 模型训练和测试
+    # 2. 模型训练
     for epoch in range(epoch_num):
         model.train()
         # 2.1 创建DataLoader
@@ -137,60 +130,63 @@ def train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, de
         train_loss_list.append(this_train_loss)
 
         print(f"epoch: {epoch+1}, train loss: {this_train_loss}")
-
     return train_loss_list
 
+def test(device):
+    # 3. 测试
+    model.eval()
+    test_loss_total = 0
 
-# 超参数
-lr = 0.1
-epoch_num = 100
-batch_size = 64
-train_loss_list= train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device)
+    # ### 新增：创建空列表，用于收集预测值和真实值 ###
+    all_preds = []
+    all_targets = []
 
-# 3. 测试
-model.eval()
-test_loss_total = 0
+    # 3.1 定义DataLoader
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    # 3.2 计算测试误差
+    with torch.no_grad():  # 测试时关闭梯度计算
+        for X, y in test_loader:
+            X, y = X.to(device), y.to(device)
+            y_pred = model(X)
+            loss_value = log_rmse(y_pred.squeeze(), y)
+            # loss_value = mse_loss(y_pred.squeeze(), y)  # MAE损失
+            test_loss_total += loss_value.item() * X.shape[0]
 
-# ### 新增：创建空列表，用于收集预测值和真实值 ###
-all_preds = []
-all_targets = []
+            # ### 新增：将当前批次的预测值和真实值存入列表 ###
+            all_preds.extend(y_pred.squeeze().cpu().numpy())
+            all_targets.extend(y.cpu().numpy())
 
-# 3.1 定义DataLoader
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-# 3.2 计算测试误差
-with torch.no_grad():   # 测试时关闭梯度计算
-    for X, y in test_loader:
-        X, y = X.to(device), y.to(device)
-        y_pred = model(X)
-        loss_value = log_rmse(y_pred.squeeze(), y)
-        # loss_value = mse_loss(y_pred.squeeze(), y)  # MAE损失
-        test_loss_total += loss_value.item() * X.shape[0]
-
-        # ### 新增：将当前批次的预测值和真实值存入列表 ###
-        all_preds.extend(y_pred.squeeze().cpu().numpy())
-        all_targets.extend(y.cpu().numpy())
-
-this_test_loss = test_loss_total / len(test_dataset)
-print(f"test loss: {this_test_loss}")
-
-# 画图
-plt.plot(train_loss_list, 'r-', label='train loss',linewidth=3)
-plt.legend()  # # 自动使用每条线的 label
+        this_test_loss = test_loss_total / len(test_dataset)
+        print(f"test loss: {this_test_loss}")
+        return all_preds,all_targets
 
 
-# ### 新增：绘制测试集预测值与真实值对比曲线 ###
-plt.figure(figsize=(12, 6))
-# 方法一：折线图（适合观察趋势）
-plt.plot(all_targets, 'b-', label='True Values', linewidth=1.5, alpha=0.7)
-plt.plot(all_preds, 'r-', label='Predicted Values', linewidth=1.5, alpha=0.7)
-plt.title('Test Set: Predicted vs Actual Values')
-plt.xlabel('Sample Index')
-plt.ylabel('Sale Price (log scale)')
-plt.legend()
-plt.tight_layout()
-plt.savefig("outputs/test_prediction_vs_actual.png", dpi=150)
-plt.show()
+if __name__ == "__main__":
+    # 1. 加载数据
+    train_dataset, test_dataset, feature_num = create_dataset()
+    print(feature_num)
+    # 定义模型
+    model = Model(device=device, feature_num=feature_num)
+    # 训练
+    train_loss_list = train(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device)
+    # 测试
+    all_preds, all_targets = test(device)
+    # 画图
+    plt.plot(train_loss_list, 'r-', label='train loss',linewidth=3)
+    plt.legend()  # # 自动使用每条线的 label
+
+    # ### 新增：绘制测试集预测值与真实值对比曲线 ###
+    plt.figure(figsize=(12, 6))
+    # 方法一：折线图（适合观察趋势）
+    plt.plot(all_targets, 'b-', label='True Values', linewidth=1.5, alpha=0.7)
+    plt.plot(all_preds, 'r-', label='Predicted Values', linewidth=1.5, alpha=0.7)
+    plt.title('Test Set: Predicted vs Actual Values')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Sale Price (log scale)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("outputs/test_prediction_vs_actual.png", dpi=150)
+    plt.show()
 
 
 

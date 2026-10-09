@@ -13,6 +13,9 @@ from sklearn.impute import SimpleImputer    # 缺省值处理
 from sklearn.preprocessing import StandardScaler, OneHotEncoder # 标准化和独热编码
 from torch.utils.data import TensorDataset, DataLoader  # 数据集和数据加载器
 
+# 统一定义全局变量：device
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 # 创建数据集
 def create_dataset():
     # 1. 从文件读取数据
@@ -59,14 +62,11 @@ def create_dataset():
     train_dataset = TensorDataset(torch.tensor(x_train.values).float(), torch.tensor(y_train.values).float())
     test_dataset = TensorDataset(torch.tensor(x_test.values).float(), torch.tensor(y_test.values).float())
     # 返回训练集和测试集，以及特征的数量
+    print(f"X.shape[1]：{X.shape[1]}；x_train.shape[1]：{x_train.shape[1]}")
     return train_dataset, test_dataset, x_train.shape[1]
 
-# 测试主流程
-# 1. 加载数据
-train_dataset, test_dataset, feature_num = create_dataset()
-print(feature_num)
-
-# 2. 创建模型
+# 2. 定义模型
+feature_num = 0
 class Model(nn.Module):  #继承父类
     def __init__(self,device='cpu',feature_num=feature_num):
         # 初始化参数
@@ -87,34 +87,31 @@ class Model(nn.Module):  #继承父类
         x = self.dropout(x)
         x = self.linear2(x)
         return x
-# 统一定义全局变量：device
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-# 定义模型
-model = Model(device=device,feature_num=feature_num)
 
-# 3. 自定义损失函数
-def log_rmse(y_pred, target):
-    y_pred = torch.clamp(y_pred, 1, float("inf"))
-    mse = nn.MSELoss()
-    return torch.sqrt( mse( torch.log(y_pred), torch.log(target) ) )
-mse_loss = nn.MSELoss()
-
-# 4. 模型训练和测试
-def train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device):
-    #  将模型加载到设备
-    model = model.to(device)
+# 4. 模型训练和测试函数
+def train_test(train_dataset, test_dataset, lr, epoch_num, batch_size, device):
+    ######  准备工作  ######
+    # 定义模型,将模型加载到设备
+    model = Model(device=device, feature_num=feature_num).to(device)
     # 定义优化器
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # 自定义损失函数
+    def log_rmse(y_pred, target):
+        y_pred = torch.clamp(y_pred, 1, float("inf"))
+        mse = nn.MSELoss()
+        return torch.sqrt(mse(torch.log(y_pred), torch.log(target)))
+    mse_loss = nn.MSELoss()
     # 定义训练误差和测试误差变化列表
     train_loss_list = []
     test_loss_list = []
 
+
     # 2. 模型训练和测试
     for epoch in range(epoch_num):
-        model.train()
         # 2.1 创建DataLoader
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         train_loss_total = 0
+        model.train()
         # 2.2 按批次迭代训练模型
         for batch_idx, (X, y) in enumerate(train_loader):
             # 将数据加载到设备
@@ -157,11 +154,20 @@ def train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, de
     return train_loss_list, test_loss_list
 
 
+
+# 测试主流程
+
 # 超参数
 lr = 0.1
 epoch_num = 100
 batch_size = 64
-train_loss_list, test_loss_list = train_test(model, train_dataset, test_dataset, lr, epoch_num, batch_size, device)
+
+# 加载数据
+train_dataset, test_dataset, feature_num = create_dataset()
+print(f"feature_num：{feature_num}")
+
+# 训练函数
+train_loss_list, test_loss_list = train_test(train_dataset, test_dataset, lr, epoch_num, batch_size, device)
 
 # 画图
 plt.plot(train_loss_list, 'r-', label='train loss',linewidth=3)
